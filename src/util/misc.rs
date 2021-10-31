@@ -525,5 +525,91 @@ mod tests {
             assert!(result.unwrap());
         }
     }
+
+    mod multisig {
+        use std::str::FromStr;
+
+        use hashes::hex::FromHex;
+        use super::super::{MessageSignature, get_payload_bytes};
+        use crate::util::misc::hash160;
+        use crate::{Address, util::misc::signed_msg_hash};
+        use crate::util::ecdsa::{PublicKey, PrivateKey};
+        use crate::Network;
+        use crate::Script;
+        use crate::util::address::AddressType;
+
+        /// Given a multisig script hash address and a Script
+        /// verify the script is valid
+        fn verify_multisig_address(address: &Address, script: &Script) -> bool {
+            match address.address_type() {
+                Some(AddressType::P2sh) => {
+                    let script_hash = script.script_hash().to_vec();
+                    let address_decoded = get_payload_bytes(address);
+                    if address_decoded == script_hash {
+                        true
+                    } else {
+                        let mut script256_hash = script.wscript_hash().to_vec();
+                        let mut redeem_script: Vec<u8> = vec![0, 32];
+                        redeem_script.append(&mut script256_hash);
+                        let script_pubkey = hash160(&redeem_script).to_vec();
+                        address_decoded == script_pubkey
+                    }
+                },
+                Some(AddressType::P2wsh) => {
+                    let script_hash = script.wscript_hash().to_vec();
+                    let address_decoded = get_payload_bytes(address);
+                    address_decoded == script_hash
+                },
+                _ => {
+                    false
+                }
+            }
+        }
+
+        #[test]
+        fn test_p2sh_multisig() {
+            let secp_ctx = secp256k1::Secp256k1::new();
+
+            // 2 of 3 required. 2 privkeys are known
+            let privkey1_string = "31d86797d300886a277997220828a2e49b6477016d82028c9e205d648b4961af".to_string();
+            let privkey1 = PrivateKey::new(
+                secp256k1::SecretKey::from_str(&privkey1_string).unwrap(),
+                Network::Bitcoin,
+            );
+            let _pubkey1 = privkey1.public_key(&secp_ctx);
+
+            let privkey2_string = "0e4a59c7f6d101fb8fa29f5c9f0106420b7876930abfa47862a9358b7f9dc0f9".to_string();
+            let privkey2 = PrivateKey::new(
+                secp256k1::SecretKey::from_str(&privkey2_string).unwrap(),
+                Network::Bitcoin,
+            );
+            let _pubkey2 = privkey2.public_key(&secp_ctx);
+
+            let pubkey3_string = "03c9b1dedf1db03447d97288fd881655707a4ca822e551b89ab74830b1ee61ff6a";
+            let _pubkey3 = PublicKey::from_str(&pubkey3_string).unwrap();
+
+
+            // 2-of-3 multisig addresses
+            let p2sh_address = Address::from_str("3CqWv9hurH6mCT2anQgjSTCULhf3M1zQot").unwrap();
+            let p2wsh_address = Address::from_str("bc1qrv7a28u28a3hk8xxtmcgp83eul62x03yap0qgs5fjc3j0qgvj88s3wgghe").unwrap();
+            let p2sh_p2wsh_address = Address::from_str("38vcwPg9xhaUtVoc7jDsZSXc1EYY6gfgeF").unwrap();
+
+            // Message
+            let message_string = "test message to sign".to_string();
+            let _message_hash = signed_msg_hash(&message_string);
+            // Signature
+            let sig_string = "206b079e6f3d74a83b5b90710a803f54a1d8c0beb7abaa1b9a5b26f100ef36e8f25d6f7eb73f10eaaac4fe725cb2901f60b890009f93318c7df4836df3b22b9901".to_string();
+            let sig_bytes = <Vec<u8>>::from_hex(&sig_string).unwrap();
+            let _message_signature = MessageSignature::from_slice(&sig_bytes).unwrap();
+
+            // Script
+            let script_string = "52210347ff3dacd07a1f43805ec6808e801505a6e18245178609972a68afbc2777ff2b21038f6d5dd3f4ba4f39331843328c28c4ffef9e37330c916a4426a0e3ae00d7d2d12103c9b1dedf1db03447d97288fd881655707a4ca822e551b89ab74830b1ee61ff6a53ae".to_string();
+            let script = Script::from_str(&script_string).unwrap();
+
+            assert!(verify_multisig_address(&p2sh_address, &script));
+            assert!(verify_multisig_address(&p2wsh_address, &script));
+            assert!(verify_multisig_address(&p2sh_p2wsh_address, &script));
+        }
+    }
 }
 
