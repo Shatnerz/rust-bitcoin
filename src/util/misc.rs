@@ -537,6 +537,7 @@ mod tests {
         use crate::Network;
         use crate::Script;
         use crate::util::address::AddressType;
+        use hashes::sha256d;
 
         /// Given a multisig script hash address and a Script
         /// verify the script is valid
@@ -564,6 +565,80 @@ mod tests {
                     false
                 }
             }
+        }
+
+        fn parse_pushnum(opcode_string: Option<&str>) -> u8 {
+            // This is just a quick and dirty solution
+            match opcode_string {
+                Some("OP_PUSHNUM_1") => 1,
+                Some("OP_PUSHNUM_2") => 2,
+                Some("OP_PUSHNUM_3") => 3,
+                Some("OP_PUSHNUM_4") => 4,
+                Some("OP_PUSHNUM_5") => 5,
+                Some("OP_PUSHNUM_6") => 6,
+                Some("OP_PUSHNUM_7") => 7,
+                Some("OP_PUSHNUM_8") => 8,
+                Some("OP_PUSHNUM_9") => 9,
+                Some("OP_PUSHNUM_10") => 10,
+                Some("OP_PUSHNUM_11") => 11,
+                Some("OP_PUSHNUM_12") => 12,
+                Some("OP_PUSHNUM_13") => 13,
+                Some("OP_PUSHNUM_14") => 14,
+                Some("OP_PUSHNUM_15") => 15,
+                Some("OP_PUSHNUM_16") => 16,
+                _ => {
+                    println!("TODO: handle errors");
+                    0
+                }
+            }
+        }
+
+        fn verify_multisig_script<C: secp256k1::Verification>(
+            secp_ctx: &secp256k1::Secp256k1<C>,
+            script: &Script,
+            msg_hash: sha256d::Hash,
+            signatures: &Vec<MessageSignature>
+        ) -> bool {
+            // Not a perfect solution, but will do for now
+            // Should probably manipulate the bytes directly, but I'm not seeing an opcode reader
+            let asm_string = script.asm();
+            let mut script_vec = asm_string.split(" ").collect::<Vec<&str>>();
+
+            // Verify that it's a multsig script
+            if script_vec.pop() != Some("OP_CHECKMULTISIG") {
+                println!("SOMETHING WENT WRONG");
+                return false // TODO: some error handling
+            }
+
+            // out number of allowed and required keys
+            let num_allowed_opcode = script_vec.pop();
+            let num_allowed = parse_pushnum(num_allowed_opcode);
+            script_vec.reverse();
+            let num_required_opcode = script_vec.pop();
+            let num_required = parse_pushnum(num_required_opcode);
+
+            let mut allowed_keys: Vec<PublicKey> = vec![];
+            for _ in 0..num_allowed {
+                script_vec.pop();
+                let pubkey_string = script_vec.pop().unwrap();
+                let pubkey = PublicKey::from_str(pubkey_string).unwrap();
+                allowed_keys.push(pubkey);
+            }
+
+            let addresses = allowed_keys.iter().map(|key| {
+                // Network isn't actually important here.
+                // It just makes it convenient to call is_signed_by_address()
+                Address::p2pkh(key, ::Network::Bitcoin)
+            }).collect::<Vec<Address>>();
+
+            // Check signatures against addresses
+            let valid_signatures = signatures.iter().filter(|signature| {
+                addresses.iter().any(|address| {
+                    signature.is_signed_by_address(secp_ctx, address, msg_hash).unwrap() // TODO: some error handling
+                })
+            }).count() as u8;
+
+            valid_signatures >= num_required
         }
 
         #[test]
@@ -596,11 +671,18 @@ mod tests {
 
             // Message
             let message_string = "test message to sign".to_string();
-            let _message_hash = signed_msg_hash(&message_string);
-            // Signature
-            let sig_string = "206b079e6f3d74a83b5b90710a803f54a1d8c0beb7abaa1b9a5b26f100ef36e8f25d6f7eb73f10eaaac4fe725cb2901f60b890009f93318c7df4836df3b22b9901".to_string();
-            let sig_bytes = <Vec<u8>>::from_hex(&sig_string).unwrap();
-            let _message_signature = MessageSignature::from_slice(&sig_bytes).unwrap();
+            let message_hash = signed_msg_hash(&message_string);
+            // Signatures
+            let sig1_string = "206b079e6f3d74a83b5b90710a803f54a1d8c0beb7abaa1b9a5b26f100ef36e8f25d6f7eb73f10eaaac4fe725cb2901f60b890009f93318c7df4836df3b22b9901".to_string();
+            let sig1_bytes = <Vec<u8>>::from_hex(&sig1_string).unwrap();
+            let message_signature1 = MessageSignature::from_slice(&sig1_bytes).unwrap();
+            let sig2_string = "1fc6012908da4e7d3d4ef6c765be80c10a45cfc7352b61af4809e9e30b92ddc0676705699a458b1bd42fdb2f7d78b52238337962d662991e384b6f10b35e3637a2".to_string();
+            let sig2_bytes = <Vec<u8>>::from_hex(&sig2_string).unwrap();
+            let message_signature2 = MessageSignature::from_slice(&sig2_bytes).unwrap();
+            let signatures = vec![
+                message_signature1,
+                message_signature2
+            ];
 
             // Script
             let script_string = "52210347ff3dacd07a1f43805ec6808e801505a6e18245178609972a68afbc2777ff2b21038f6d5dd3f4ba4f39331843328c28c4ffef9e37330c916a4426a0e3ae00d7d2d12103c9b1dedf1db03447d97288fd881655707a4ca822e551b89ab74830b1ee61ff6a53ae".to_string();
@@ -609,6 +691,8 @@ mod tests {
             assert!(verify_multisig_address(&p2sh_address, &script));
             assert!(verify_multisig_address(&p2wsh_address, &script));
             assert!(verify_multisig_address(&p2sh_p2wsh_address, &script));
+
+            assert!(verify_multisig_script(&secp_ctx, &script, message_hash, &signatures));
         }
     }
 }
