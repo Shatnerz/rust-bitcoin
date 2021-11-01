@@ -538,6 +538,7 @@ mod tests {
         use crate::Script;
         use crate::util::address::AddressType;
         use hashes::sha256d;
+        use crate::blockdata::opcodes;
 
         /// Given a multisig script hash address and a Script
         /// verify the script is valid
@@ -567,30 +568,96 @@ mod tests {
             }
         }
 
-        fn parse_pushnum(opcode_string: Option<&str>) -> u8 {
+        // fn parse_pushnum(opcode_string: Option<&str>) -> u8 {
+        //     // This is just a quick and dirty solution
+        //     match opcode_string {
+        //         Some("OP_PUSHNUM_1") => 1,
+        //         Some("OP_PUSHNUM_2") => 2,
+        //         Some("OP_PUSHNUM_3") => 3,
+        //         Some("OP_PUSHNUM_4") => 4,
+        //         Some("OP_PUSHNUM_5") => 5,
+        //         Some("OP_PUSHNUM_6") => 6,
+        //         Some("OP_PUSHNUM_7") => 7,
+        //         Some("OP_PUSHNUM_8") => 8,
+        //         Some("OP_PUSHNUM_9") => 9,
+        //         Some("OP_PUSHNUM_10") => 10,
+        //         Some("OP_PUSHNUM_11") => 11,
+        //         Some("OP_PUSHNUM_12") => 12,
+        //         Some("OP_PUSHNUM_13") => 13,
+        //         Some("OP_PUSHNUM_14") => 14,
+        //         Some("OP_PUSHNUM_15") => 15,
+        //         Some("OP_PUSHNUM_16") => 16,
+        //         _ => {
+        //             println!("TODO: handle errors");
+        //             0
+        //         }
+        //     }
+        // }
+
+        fn parse_pushnum_2(opcode: opcodes::All) -> u8 {
             // This is just a quick and dirty solution
-            match opcode_string {
-                Some("OP_PUSHNUM_1") => 1,
-                Some("OP_PUSHNUM_2") => 2,
-                Some("OP_PUSHNUM_3") => 3,
-                Some("OP_PUSHNUM_4") => 4,
-                Some("OP_PUSHNUM_5") => 5,
-                Some("OP_PUSHNUM_6") => 6,
-                Some("OP_PUSHNUM_7") => 7,
-                Some("OP_PUSHNUM_8") => 8,
-                Some("OP_PUSHNUM_9") => 9,
-                Some("OP_PUSHNUM_10") => 10,
-                Some("OP_PUSHNUM_11") => 11,
-                Some("OP_PUSHNUM_12") => 12,
-                Some("OP_PUSHNUM_13") => 13,
-                Some("OP_PUSHNUM_14") => 14,
-                Some("OP_PUSHNUM_15") => 15,
-                Some("OP_PUSHNUM_16") => 16,
+            match opcode {
+                opcodes::all::OP_PUSHNUM_1 => 1,
+                opcodes::all::OP_PUSHNUM_2 => 2,
+                opcodes::all::OP_PUSHNUM_3 => 3,
+                opcodes::all::OP_PUSHNUM_4 => 4,
+                opcodes::all::OP_PUSHNUM_5 => 5,
+                opcodes::all::OP_PUSHNUM_6 => 6,
+                opcodes::all::OP_PUSHNUM_7 => 7,
+                opcodes::all::OP_PUSHNUM_8 => 8,
+                opcodes::all::OP_PUSHNUM_9 => 9,
+                opcodes::all::OP_PUSHNUM_10 => 10,
+                opcodes::all::OP_PUSHNUM_11 => 11,
+                opcodes::all::OP_PUSHNUM_12 => 12,
+                opcodes::all::OP_PUSHNUM_13 => 13,
+                opcodes::all::OP_PUSHNUM_14 => 14,
+                opcodes::all::OP_PUSHNUM_15 => 15,
+                opcodes::all::OP_PUSHNUM_16 => 16,
                 _ => {
                     println!("TODO: handle errors");
                     0
                 }
             }
+        }
+
+        fn parse_multisig_script(script: &Script) -> Option<(u8, Vec<PublicKey>)> {
+            let bytes = script.as_bytes();
+
+            let final_code = opcodes::All::from(bytes[bytes.len() - 1]);
+            if final_code != opcodes::all::OP_CHECKMULTISIG {
+                // Not a multisig script
+                return None
+            }
+
+            let mut num_required: u8 = 0;
+            let mut num_given: u8 = 0;
+            let mut pubkeys: Vec<PublicKey> = vec![];
+
+            let mut index = 0;
+            while index < bytes.len() - 1 {
+                if index as u8 == 0 {
+                    let opcode = opcodes::All::from(bytes[index]);
+                    num_required = parse_pushnum_2(opcode);
+                } else if index as u8 == bytes.len() as u8 - 2 {
+                    let opcode = opcodes::All::from(bytes[index]);
+                    num_given = parse_pushnum_2(opcode);
+                } else {
+                    // assume this is OP_PUSHBYTESX
+                    if bytes[index] > 75 {
+                        println!("TODO: handle errors");
+                    }
+                    let start = index + 1;
+                    let end = start + bytes[index] as usize;
+                    let slice = &bytes[start..end];
+                    pubkeys.push(PublicKey::from_slice(slice).unwrap()); // TODO error handling
+                    index += bytes[index] as usize;
+                }
+                index += 1;
+            }
+
+            assert!(pubkeys.len() == num_given as usize);
+            
+            Some((num_required, pubkeys))
         }
 
         fn verify_multisig_script<C: secp256k1::Verification>(
@@ -599,31 +666,33 @@ mod tests {
             msg_hash: sha256d::Hash,
             signatures: &Vec<MessageSignature>
         ) -> bool {
-            // Not a perfect solution, but will do for now
-            // Should probably manipulate the bytes directly, but I'm not seeing an opcode reader
-            let asm_string = script.asm();
-            let mut script_vec = asm_string.split(" ").collect::<Vec<&str>>();
+            // // Not a perfect solution, but will do for now
+            // // Should probably manipulate the bytes directly, but I'm not seeing an opcode reader
+            // let asm_string = script.asm();
+            // let mut script_vec = asm_string.split(" ").collect::<Vec<&str>>();
 
-            // Verify that it's a multsig script
-            if script_vec.pop() != Some("OP_CHECKMULTISIG") {
-                println!("SOMETHING WENT WRONG");
-                return false // TODO: some error handling
-            }
+            // // Verify that it's a multsig script
+            // if script_vec.pop() != Some("OP_CHECKMULTISIG") {
+            //     println!("SOMETHING WENT WRONG");
+            //     return false // TODO: some error handling
+            // }
 
-            // out number of allowed and required keys
-            let num_allowed_opcode = script_vec.pop();
-            let num_allowed = parse_pushnum(num_allowed_opcode);
-            script_vec.reverse();
-            let num_required_opcode = script_vec.pop();
-            let num_required = parse_pushnum(num_required_opcode);
+            // // out number of allowed and required keys
+            // let num_allowed_opcode = script_vec.pop();
+            // let num_allowed = parse_pushnum(num_allowed_opcode);
+            // script_vec.reverse();
+            // let num_required_opcode = script_vec.pop();
+            // let num_required = parse_pushnum(num_required_opcode);
 
-            let mut allowed_keys: Vec<PublicKey> = vec![];
-            for _ in 0..num_allowed {
-                script_vec.pop();
-                let pubkey_string = script_vec.pop().unwrap();
-                let pubkey = PublicKey::from_str(pubkey_string).unwrap();
-                allowed_keys.push(pubkey);
-            }
+            // let mut allowed_keys: Vec<PublicKey> = vec![];
+            // for _ in 0..num_allowed {
+            //     script_vec.pop();
+            //     let pubkey_string = script_vec.pop().unwrap();
+            //     let pubkey = PublicKey::from_str(pubkey_string).unwrap();
+            //     allowed_keys.push(pubkey);
+            // }
+
+            let (num_required, allowed_keys) = parse_multisig_script(script).unwrap(); // TODO: handle errors
 
             let addresses = allowed_keys.iter().map(|key| {
                 // Network isn't actually important here.
