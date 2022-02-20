@@ -41,7 +41,7 @@ use core::str::FromStr;
 
 use secp256k1::{Secp256k1, Verification};
 use bech32;
-use hashes::Hash;
+use hashes::{sha256, Hash, HashEngine};
 use hash_types::{PubkeyHash, ScriptHash};
 use blockdata::{script, opcodes};
 use blockdata::constants::{PUBKEY_ADDRESS_PREFIX_MAIN, SCRIPT_ADDRESS_PREFIX_MAIN, PUBKEY_ADDRESS_PREFIX_TEST, SCRIPT_ADDRESS_PREFIX_TEST, MAX_SCRIPT_ELEMENT_SIZE};
@@ -870,6 +870,67 @@ impl fmt::Debug for Address {
     }
 }
 
+/// Determine if an address is related to a given public key
+pub fn andrew(
+    address: &Address,
+    pubkey: &PublicKey 
+) -> Result<bool, Error> {
+    let address_data = match bech32_decode(address) {
+        Ok(data) => data,
+        Err(_) => {
+            let pubkey_hash = pubkey.pubkey_hash();
+            let redeem_hash = segwit_redeem_hash(&pubkey_hash);
+            let base58_check = get_payload_bytes(address);
+            return Ok(
+                (*pubkey_hash == *base58_check) ||
+                (*redeem_hash == *base58_check)
+            );
+        }
+    };
+    Ok(*pubkey.pubkey_hash() == *address_data)
+    // Ok(match address.address_type() {
+    //     Some(AddressType::P2pkh) => false,
+    //     Some(AddressType::P2sh) => {
+    //         // p2sh-wpkh
+    //         false
+    //     },
+    //     Some(AddressType::P2wpkh) => {
+    //         *pubkey.pubkey_hash() == bech32_decode(address)?
+    //     },
+    //     Some(AddressType::P2wsh) => false,
+    //     Some(AddressType::P2tr) => {
+    //         // TODO: make a pk trait
+    //         true
+    //     },
+    //     None => false
+    // })
+}
+
+/// decode address to Bech32 u8 byte array
+fn bech32_decode(address: &Address) -> Result<Vec<u8>, Error> {
+    match bech32::decode(&address.to_string()) {
+        Ok((_, u5_vec, _)) => Ok(bech32::convert_bits(&u5_vec[1..], 5, 8, true)?),
+        Err(e) => Err(Error::Bech32(e))
+    }
+}
+
+/// Convert a byte array of a pubkey hash into a segwit redeem hash
+pub fn segwit_redeem_hash(pubkey_hash: &[u8]) -> ::hashes::hash160::Hash {
+    let mut sha_engine = sha256::Hash::engine();
+    sha_engine.input(&[0, 20]);
+    sha_engine.input(pubkey_hash);
+    ::hashes::hash160::Hash::from_engine(sha_engine)
+}
+
+/// Pull out payload as byte array
+pub fn get_payload_bytes(address: &Address) -> &[u8] {
+    match &address.payload {
+        Payload::ScriptHash(hash) => hash,
+        Payload::PubkeyHash(hash) => hash,
+        Payload::WitnessProgram { program, .. } => program,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use core::str::FromStr;
@@ -888,6 +949,60 @@ mod tests {
     macro_rules! hex_script (($hex:expr) => (Script::from(hex!($hex))));
     macro_rules! hex_pubkeyhash (($hex:expr) => (PubkeyHash::from_hex(&$hex).unwrap()));
     macro_rules! hex_scripthash (($hex:expr) => (ScriptHash::from_hex($hex).unwrap()));
+
+    mod test_andrew {
+        use super::*;
+
+        #[test]
+        fn test_p2wpkh() {
+            let address_string = "bc1qhvd6suvqzjcu9pxjhrwhtrlj85ny3n2mqql5w4";
+            let address = Address::from_str(address_string).expect("address");
+
+            let pubkey_string = "0347ff3dacd07a1f43805ec6808e801505a6e18245178609972a68afbc2777ff2b";
+            let pubkey = PublicKey::from_str(pubkey_string).expect("pubkey");
+
+            assert!(result);
+        }
+
+        #[test]
+        fn test_p2shwpkh() {
+            let address_string = "3EZQk4F8GURH5sqVMLTFisD17yNeKa7Dfs";
+            let address = Address::from_str(address_string).expect("address");
+
+            let pubkey_string = "0347ff3dacd07a1f43805ec6808e801505a6e18245178609972a68afbc2777ff2b";
+            let pubkey = PublicKey::from_str(pubkey_string).expect("pubkey");
+
+            let result = andrew(&address, &pubkey).unwrap();
+            assert!(result);
+        }
+
+        #[test]
+        fn test_p2pkh() {
+            let address_string = "1J4LVanjHMu3JkXbVrahNuQCTGCRRgfWWx";
+            let address = Address::from_str(address_string).expect("address");
+
+            let pubkey_string = "0347ff3dacd07a1f43805ec6808e801505a6e18245178609972a68afbc2777ff2b";
+            let pubkey = PublicKey::from_str(pubkey_string).expect("pubkey");
+
+            let result = andrew(&address, &pubkey).unwrap();
+            assert!(result);
+        }
+
+        #[test]
+        fn test_p2pkh_uncompressed_key() {
+            let address_string = "msvS7KzhReCDpQEJaV2hmGNvuQqVUDuC6p";
+            let address = Address::from_str(address_string).expect("address");
+
+            let pubkey_string = "04e96e22004e3db93530de27ccddfdf1463975d2138ac018fc3e7ba1a2e5e0aad8e424d0b55e2436eb1d0dcd5cb2b8bcc6d53412c22f358de57803a6a655fbbd04";
+            let pubkey = PublicKey::from_str(pubkey_string).expect("pubkey");
+
+            let result = andrew(&address, &pubkey).unwrap();
+            assert!(result);
+        }
+
+        #[test]
+        fn test_p2pkh() {}
+    }
 
     fn roundtrips(addr: &Address) {
         assert_eq!(
